@@ -1,0 +1,16 @@
+[project]
+name = "obsidian-ocr"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115.12",
+    "langchain-google-genai>=2.1.2",
+    "mistralai>=1.6.0",
+    "pillow>=11.2.0",
+    "pydantic>=2.10.6",
+    "python-dotenv>=1.1.0",
+    "python-multipart>=0.0.20",
+    "uvicorn>=0.34.0",
+]
