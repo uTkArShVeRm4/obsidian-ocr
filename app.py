@@ -66,27 +66,29 @@ def git_commit_file(file_path: str) -> bool:
     try:
         # Extract directory from file path
         dir_path = os.path.dirname(file_path)
+        base_dir = "data/output"  # The base directory of the git repo
 
         # Check if directory is a git repository
         check_git = subprocess.run(
             ["git", "rev-parse", "--is-inside-work-tree"],
-            cwd=dir_path,
+            cwd=base_dir,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
         )
 
         if check_git.returncode != 0:
-            print(f"Directory {dir_path} is not a git repository")
+            print(f"Directory {base_dir} is not a git repository")
             return False
 
         # Get the relative path for git
-        rel_path = os.path.basename(file_path)
+        # We need to make the path relative to the git root (data/output)
+        rel_path = os.path.relpath(file_path, base_dir)
 
         # Run git add
         add_result = subprocess.run(
             ["git", "add", rel_path],
-            cwd=dir_path,
+            cwd=base_dir,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -97,10 +99,10 @@ def git_commit_file(file_path: str) -> bool:
             return False
 
         # Run git commit
-        commit_message = f"Add note: {rel_path}"
+        commit_message = f"Add {'attachment' if 'Attachments' in rel_path else 'note'}: {os.path.basename(file_path)}"
         commit_result = subprocess.run(
             ["git", "commit", "-m", commit_message],
-            cwd=dir_path,
+            cwd=base_dir,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -116,6 +118,38 @@ def git_commit_file(file_path: str) -> bool:
     except Exception as e:
         print(f"Error during git operations: {str(e)}")
         return False
+
+
+def save_image_as_attachment(original_image_path: str) -> str:
+    """
+    Save the uploaded image to the Attachments folder and return the image name for embedding.
+
+    Args:
+        original_image_path: Path to the original uploaded image
+
+    Returns:
+        str: The image filename for embedding in markdown
+    """
+    # Create Attachments directory if it doesn't exist
+    attachments_dir = "data/output/Attachments"
+    os.makedirs(attachments_dir, exist_ok=True)
+
+    # Get original filename and ensure it's unique in the Attachments folder
+    original_filename = os.path.basename(original_image_path)
+    base_name, ext = os.path.splitext(original_filename)
+
+    # Generate a unique name for the attachment
+    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+    unique_image_name = f"{base_name}_{timestamp}{ext}"
+    attachment_path = os.path.join(attachments_dir, unique_image_name)
+
+    # Copy the image to the Attachments folder
+    import shutil
+
+    shutil.copy2(original_image_path, attachment_path)
+
+    # Return the filename for embedding
+    return unique_image_name
 
 
 def ensure_unique_filename(base_path: str, file_name: str) -> str:
@@ -162,6 +196,13 @@ async def upload_and_process_image(file: UploadFile = File(...)):
     try:
         note = process_image_with_llm_retry(file_path)
 
+        # Save the image as an attachment and get the name for embedding
+        attachment_name = save_image_as_attachment(file_path)
+
+        # Add the image embed to the note content
+        image_embed = f"\n\n![[{attachment_name}]]"
+        note.content += image_embed
+
         # Save the note to the output directory with a unique name
         base_file_name = note.file_name
         unique_file_name = ensure_unique_filename("data/output", base_file_name)
@@ -171,7 +212,7 @@ async def upload_and_process_image(file: UploadFile = File(...)):
             f.write(note.content)
 
         # Add a message about filename changes if needed
-        message = "Image processed successfully and note created"
+        message = "Image processed successfully and note created with image attachment"
         if unique_file_name != base_file_name and not base_file_name.endswith(".md"):
             unique_file_name_no_ext = os.path.splitext(unique_file_name)[0]
             base_file_name_no_ext = base_file_name
@@ -182,11 +223,17 @@ async def upload_and_process_image(file: UploadFile = File(...)):
 
         # Attempt to commit the file to git if enabled
         if GIT_INTEGRATION_ENABLED:
-            git_result = git_commit_file(output_path)
-            if git_result:
+            # Commit the note file
+            note_commit = git_commit_file(output_path)
+
+            # Commit the attachment file
+            attachment_path = f"data/output/Attachments/{attachment_name}"
+            attachment_commit = git_commit_file(attachment_path)
+
+            if note_commit and attachment_commit:
                 message += " and committed to git repository"
             else:
-                message += " (git commit failed - check logs for details)"
+                message += " (git commit partially failed - check logs for details)"
 
         return ProcessResponse(
             file_name=unique_file_name, file_path=output_path, message=message
